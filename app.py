@@ -13,8 +13,9 @@ st.set_page_config(
     layout="wide",
 )
 
-DATA_PATH = Path("data/synthetic_av_pudo_events.csv")
+DATA_PATH = Path(__file__).resolve().parent / "data" / "synthetic_av_pudo_events.csv"
 DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+DAY_MAP = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday", 7: "Sunday"}
 PUDO_COLORS = {"Pickup": "#C62828", "Dropoff": "#F28E9C"}
 
 
@@ -22,9 +23,37 @@ PUDO_COLORS = {"Pickup": "#C62828", "Dropoff": "#F28E9C"}
 def load_data(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(path)
-    df = pd.read_csv(path)
+
+    # utf-8-sig safely removes the BOM present in the archived CSV header.
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    df.columns = df.columns.str.strip()
+
+    required = {
+        "pullover_type",
+        "day_of_week",
+        "hour",
+        "adjusted_point",
+        "desired_point",
+        "curb_geo",
+        "polygon_type",
+    }
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
+
+    df["pullover_type"] = df["pullover_type"].astype(str).str.strip().str.title()
     df["hour"] = pd.to_numeric(df["hour"], errors="coerce").astype("Int64")
-    df["day_of_week"] = pd.Categorical(df["day_of_week"], categories=DAY_ORDER, ordered=True)
+
+    # The archived file codes days as 1–7. Also accept already-labeled day names.
+    day_numeric = pd.to_numeric(df["day_of_week"], errors="coerce")
+    day_labels = day_numeric.map(DAY_MAP)
+    original_labels = df["day_of_week"].astype(str).str.strip().str.title()
+    df["day_of_week"] = day_labels.fillna(original_labels)
+    df["day_of_week"] = pd.Categorical(
+        df["day_of_week"], categories=DAY_ORDER, ordered=True
+    )
+
+    df["polygon_type"] = df["polygon_type"].astype(str).str.strip()
     df["period"] = pd.cut(
         df["hour"].astype(float),
         bins=[-1, 5, 10, 15, 18, 22, 24],
@@ -36,11 +65,10 @@ def load_data(path: Path) -> pd.DataFrame:
 def parse_point(value):
     if pd.isna(value):
         return np.nan, np.nan
-    nums = re.findall(r"-?\d+\.\d+", str(value))
+    nums = re.findall(r"-?\d+(?:\.\d+)?", str(value))
     if len(nums) < 2:
         return np.nan, np.nan
     a, b = map(float, nums[:2])
-    # San Francisco coordinates may appear as lon/lat or lat/lon.
     if abs(a) > 90:
         return b, a
     return a, b
@@ -72,9 +100,12 @@ try:
     raw = load_data(DATA_PATH)
 except FileNotFoundError:
     st.error(
-        "The dashboard is ready, but `data/synthetic_av_pudo_events.csv` is not yet in the repository. "
-        "Upload the archival CSV to that path and redeploy."
+        "The dashboard cannot find `data/synthetic_av_pudo_events.csv`. "
+        f"Expected path: `{DATA_PATH}`"
     )
+    st.stop()
+except Exception as exc:
+    st.error(f"The dataset was found but could not be loaded: {exc}")
     st.stop()
 
 with st.sidebar:
@@ -123,64 +154,28 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     c1, c2 = st.columns(2)
     by_type = filtered["pullover_type"].value_counts().rename_axis("Event type").reset_index(name="Events")
-    fig_type = px.bar(
-        by_type,
-        x="Event type",
-        y="Events",
-        color="Event type",
-        color_discrete_map=PUDO_COLORS,
-        title="Synthetic PUDO events by type",
-    )
+    fig_type = px.bar(by_type, x="Event type", y="Events", color="Event type", color_discrete_map=PUDO_COLORS, title="Synthetic PUDO events by type")
     fig_type.update_layout(showlegend=False)
     c1.plotly_chart(fig_type, use_container_width=True)
 
     by_polygon = filtered.groupby("polygon_type", observed=True).size().reset_index(name="Events")
     by_polygon["Share"] = by_polygon["Events"] / max(by_polygon["Events"].sum(), 1)
-    fig_poly = px.bar(
-        by_polygon,
-        x="polygon_type",
-        y="Events",
-        text=by_polygon["Share"].map(lambda x: f"{x:.1%}"),
-        title="Spatial concentration by analytical polygon",
-        labels={"polygon_type": "Analytical polygon"},
-    )
+    fig_poly = px.bar(by_polygon, x="polygon_type", y="Events", text=by_polygon["Share"].map(lambda x: f"{x:.1%}"), title="Spatial concentration by analytical polygon", labels={"polygon_type": "Analytical polygon"})
     c2.plotly_chart(fig_poly, use_container_width=True)
 
     by_day = filtered.groupby(["day_of_week", "pullover_type"], observed=True).size().reset_index(name="Events")
-    fig_day = px.bar(
-        by_day,
-        x="day_of_week",
-        y="Events",
-        color="pullover_type",
-        color_discrete_map=PUDO_COLORS,
-        barmode="stack",
-        title="Events by day of week",
-        labels={"day_of_week": "Day", "pullover_type": "Event type"},
-    )
+    fig_day = px.bar(by_day, x="day_of_week", y="Events", color="pullover_type", color_discrete_map=PUDO_COLORS, barmode="stack", title="Events by day of week", labels={"day_of_week": "Day", "pullover_type": "Event type"})
     st.plotly_chart(fig_day, use_container_width=True)
 
 with tab2:
     hourly = filtered.groupby(["hour", "pullover_type"], observed=True).size().reset_index(name="Events")
-    fig_hour = px.area(
-        hourly,
-        x="hour",
-        y="Events",
-        color="pullover_type",
-        color_discrete_map=PUDO_COLORS,
-        title="Hourly temporal sorting",
-        labels={"hour": "Hour of day", "pullover_type": "Event type"},
-    )
+    fig_hour = px.area(hourly, x="hour", y="Events", color="pullover_type", color_discrete_map=PUDO_COLORS, title="Hourly temporal sorting", labels={"hour": "Hour of day", "pullover_type": "Event type"})
     fig_hour.update_xaxes(dtick=1)
     st.plotly_chart(fig_hour, use_container_width=True)
 
     heat = filtered.groupby(["day_of_week", "hour"], observed=True).size().reset_index(name="Events")
     pivot = heat.pivot(index="day_of_week", columns="hour", values="Events").reindex(DAY_ORDER).fillna(0)
-    fig_heat = px.imshow(
-        pivot,
-        aspect="auto",
-        labels={"x": "Hour", "y": "Day", "color": "Events"},
-        title="Day-hour activity heat map",
-    )
+    fig_heat = px.imshow(pivot, aspect="auto", labels={"x": "Hour", "y": "Day", "color": "Events"}, title="Day-hour activity heat map")
     st.plotly_chart(fig_heat, use_container_width=True)
 
     period_counts = filtered.groupby("period", observed=True).size().reset_index(name="Events")
@@ -206,73 +201,22 @@ with tab3:
         st.plotly_chart(fig_map, use_container_width=True)
 
     cross = filtered.groupby(["polygon_type", "pullover_type"], observed=True).size().reset_index(name="Events")
-    fig_cross = px.bar(
-        cross,
-        x="polygon_type",
-        y="Events",
-        color="pullover_type",
-        color_discrete_map=PUDO_COLORS,
-        barmode="stack",
-        title="Pick-up and drop-off composition by polygon",
-        labels={"polygon_type": "Analytical polygon", "pullover_type": "Event type"},
-    )
+    fig_cross = px.bar(cross, x="polygon_type", y="Events", color="pullover_type", color_discrete_map=PUDO_COLORS, barmode="stack", title="Pick-up and drop-off composition by polygon", labels={"polygon_type": "Analytical polygon", "pullover_type": "Event type"})
     st.plotly_chart(fig_cross, use_container_width=True)
 
 with tab4:
     hourly_total = filtered.groupby("hour").size().reset_index(name="events")
     allocation = build_adaptive_allocation(hourly_total)
-    long = allocation.melt(
-        id_vars=["hour", "events"],
-        value_vars=["Parking/storage", "Loading/delivery", "Transit & accessible access", "AV PUDO"],
-        var_name="Curb function",
-        value_name="Share",
-    )
-    polar_colors = {
-        "Parking/storage": "#2F78B7",
-        "Loading/delivery": "#F5A623",
-        "Transit & accessible access": "#3A9D3D",
-        "AV PUDO": "#C62828",
-    }
+    long = allocation.melt(id_vars=["hour", "events"], value_vars=["Parking/storage", "Loading/delivery", "Transit & accessible access", "AV PUDO"], var_name="Curb function", value_name="Share")
+    polar_colors = {"Parking/storage": "#2F78B7", "Loading/delivery": "#F5A623", "Transit & accessible access": "#3A9D3D", "AV PUDO": "#C62828"}
     fig_rose = go.Figure()
     for function in ["Parking/storage", "Loading/delivery", "Transit & accessible access", "AV PUDO"]:
         part = long[long["Curb function"] == function]
-        fig_rose.add_trace(
-            go.Barpolar(
-                r=part["Share"],
-                theta=part["hour"] * 15,
-                width=[12] * len(part),
-                name=function,
-                marker_color=polar_colors[function],
-                marker_line_color="white",
-                marker_line_width=0.7,
-            )
-        )
-    fig_rose.update_layout(
-        title="Data-calibrated adaptive curb allocation scenario",
-        barmode="stack",
-        polar=dict(
-            radialaxis=dict(range=[0, 100], ticksuffix="%"),
-            angularaxis=dict(
-                direction="clockwise",
-                rotation=90,
-                tickmode="array",
-                tickvals=[0, 90, 180, 270],
-                ticktext=["12 AM", "6 AM", "12 PM", "6 PM"],
-            ),
-        ),
-        height=700,
-    )
+        fig_rose.add_trace(go.Barpolar(r=part["Share"], theta=part["hour"] * 15, width=[12] * len(part), name=function, marker_color=polar_colors[function], marker_line_color="white", marker_line_width=0.7))
+    fig_rose.update_layout(title="Data-calibrated adaptive curb allocation scenario", barmode="stack", polar=dict(radialaxis=dict(range=[0, 100], ticksuffix="%"), angularaxis=dict(direction="clockwise", rotation=90, tickmode="array", tickvals=[0, 90, 180, 270], ticktext=["12 AM", "6 AM", "12 PM", "6 PM"])), height=700)
     st.plotly_chart(fig_rose, use_container_width=True)
-    st.caption(
-        "Planning scenario only: AV PUDO rises with the filtered hourly demand index; loading is morning-weighted; "
-        "transit and accessible access remains protected; parking is the residual."
-    )
+    st.caption("Planning scenario only: AV PUDO rises with the filtered hourly demand index; loading is morning-weighted; transit and accessible access remains protected; parking is the residual.")
 
 with tab5:
     st.dataframe(filtered, use_container_width=True, hide_index=True)
-    st.download_button(
-        "Download filtered CSV",
-        filtered.to_csv(index=False).encode("utf-8"),
-        file_name="filtered_synthetic_av_pudo_events.csv",
-        mime="text/csv",
-    )
+    st.download_button("Download filtered CSV", filtered.to_csv(index=False).encode("utf-8"), file_name="filtered_synthetic_av_pudo_events.csv", mime="text/csv")
