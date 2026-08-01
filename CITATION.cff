@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "Please cite this research archive when using the synthetic data or associated materials."
+title: "Designing the Autonomous Curb"
+type: dataset
+authors:
+  - family-names: Riggs
+    given-names: William
+    orcid: "https://orcid.org/0000-0001-8562-5998"
+institution: "University of San Francisco"
+date-released: 2026-07-31
+version: "0.1.0"
+repository-code: "https://github.com/williamwriggs/designing-autonomous-curb"
+keywords:
+  - autonomous vehicles
+  - curb management
+  - pick-up and drop-off
+  - synthetic data
+  - urban design
