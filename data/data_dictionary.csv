@@ -1,0 +1,8 @@
+field,description
+pullover_type,Synthetic event type: Pickup or Dropoff
+day_of_week,Day assigned to the synthetic event
+hour,Hour of day using a 24-hour clock
+adjusted_point,Processed point adjusted to a plausible curb location
+desired_point,Synthetic desired passenger origin or destination point
+curb_geo,Generalized curb geometry associated with the event
+polygon_type,Generalized analytical curb polygon category
